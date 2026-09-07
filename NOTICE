@@ -1,0 +1,20 @@
+flop-session
+Copyright 2026 barbemint
+
+Agent-side transcript verification for FLOP compute-channel sessions, implemented
+from the FLOP Network Yellow Paper v0.5.0 (2026-09-05):
+
+    https://flop.finance/intro/yellowpaper/
+    Copyright Flop Labs
+
+Quoted requirement text in the source, README and FINDINGS is from that document
+and is reproduced for identification of the rules being implemented.
+
+No affiliation with Flop Labs. No reference implementation or published test
+vectors existed at the time of writing; see the Status section of README.md.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
