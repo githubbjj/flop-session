@@ -92,6 +92,7 @@ def main(argv: list[str]) -> int:
     if vectors is None:
         return 0
     cc = vectors["compute_channel_v1"]
+    negatives = {c["id"]: c for c in vectors.get("negative_cases", [])}
     hx = bytes.fromhex
 
     print(f"vectors: {vectors.get('profile')} {vectors.get('status')} @ {PIN_COMMIT[:7]}\n")
@@ -198,6 +199,68 @@ def main(argv: list[str]) -> int:
             False,
         )
 
+    print("\nthe published negative cases that this module is in scope for")
+    # The vector set ships 14 cases that MUST be rejected. Accepting a forgery is the one
+    # failure mode a verifier cannot have, so these matter more than the accept cases —
+    # and the accept cases alone would not have caught the receipt bug in FINDINGS #5.
+    wrong_genesis = negatives["wrong_genesis_network"]
+    check(
+        "wrong_genesis_network — a different chain gives a different channel_id",
+        channel_id(
+            bytes([hx(inputs["genesis_hash_hex"])[0] ^ 1]) + hx(inputs["genesis_hash_hex"])[1:],
+            hx(inputs["agent_account_id32_hex"]),
+            hx(inputs["miner_account_id32_hex"]),
+            inputs["nonce"],
+        ).hex(),
+        wrong_genesis["bytes_hex"],
+    )
+    # The vector states the mutated channel_id but not which of agent/miner/nonce moved, so
+    # the reproducible claim here is inequality, not the exact hash.
+    check(
+        "wrong_session — a different nonce gives a different channel_id",
+        channel_id(
+            hx(inputs["genesis_hash_hex"]),
+            hx(inputs["agent_account_id32_hex"]),
+            hx(inputs["miner_account_id32_hex"]),
+            inputs["nonce"] + 1,
+        ).hex()
+        != ci["hash_hex"],
+        True,
+    )
+    if sr25519 is not None:
+        check(
+            "invalid_receipt_signature — one flipped byte is refused",
+            sr25519.verify(
+                hx(negatives["invalid_receipt_signature"]["bytes_hex"]),
+                preimage,
+                hx(receipt["public_key_hex"]),
+            ),
+            False,
+        )
+        # This case is FINDINGS #5 shipped as a vector: its bytes are the untagged 96-byte
+        # preimage this module used to build, followed by a signature over it. A verifier
+        # with the old bug counter-signs exactly this and the chain refuses to settle.
+        legacy = hx(negatives["legacy_receipt_current_channel"]["bytes_hex"])
+        untagged = (
+            hx(ri["channel_id_hex"])
+            + hx(ri["final_root_hex"])
+            + ri["aggregate_gn"].to_bytes(16, "little")
+            + ri["payable"].to_bytes(16, "little")
+        )
+        check("legacy_receipt_current_channel is the untagged 96-byte form", legacy[:96], untagged)
+        check(
+            "legacy_receipt_current_channel — its signature is refused over the tagged preimage",
+            sr25519.verify(legacy[96:], preimage, hx(receipt["public_key_hex"])),
+            False,
+        )
+
+    # Out of scope here, and named rather than quietly skipped: unknown_leaf_enum,
+    # unknown_retention_enum, truncated_fcc4, trailing_fcc4, unknown_fcc_version,
+    # duplicate_turn_index, wrong_path_orientation, wrong_leaf_version,
+    # legacy_leaf_current_channel and invalid_validator_signature all act on SCALE-encoded
+    # wire bytes. This module takes structured turns, not a TranscriptBlob, so it has no
+    # decoder to point at them. (duplicate_turn_index and path orientation are covered on
+    # structured input in test_session.py — which is not the same as decoding the blob.)
     print(f"\n{passed}/{passed + failed} checks passed against the pinned vectors")
     return 1 if failed else 0
 
