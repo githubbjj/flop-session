@@ -48,10 +48,11 @@ this as a reading of that draft, not a client.
 
 ## The point of it
 
-Implementing surfaced four places where the Yellow Paper does not determine an answer,
-three of them on the money path — including a leaf definition in the normative body that
-the format appendix forbids, and a value the agent is required to sign that the document
-never defines. See **[FINDINGS.md](FINDINGS.md)**.
+Implementing surfaced four places where the Yellow Paper looked underdetermined — a leaf
+definition in the normative body that the format appendix forbids, and a value the agent
+is required to sign that the document never defines, among them. One of the four was my
+own misreading and is **retracted in place** rather than deleted. See
+**[FINDINGS.md](FINDINGS.md)**.
 
 ## Install and run
 
@@ -80,8 +81,10 @@ if not check.ok:
     raise SystemExit(f"refusing to counter-sign: {check.reason}")
 ```
 
-`merkle_root` deliberately has **no default** odd-node policy — see FINDINGS #2. Passing
-one is the caller admitting which convention it believes in.
+`merkle_root` takes an explicit `odd_policy` and has **no default**. For FLOP the answer is
+fixed — Appendix F.3 duplicates the odd last node — so pass `"duplicate"`; the argument
+stays required so that code reused against a different Merkle spec has to name that one's
+convention rather than inherit FLOP's. See FINDINGS #2 for why this used to say otherwise.
 
 ## Scope
 
