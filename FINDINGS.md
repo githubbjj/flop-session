@@ -159,6 +159,12 @@ receipt preimage, `channel_id`, and both sr25519 signatures. 18/18.
 The lesson is the one this repository was written about in the first place. A verifier
 that only ever agrees with itself is not a verifier, and I shipped one for five days.
 
+One more thing worth recording: the vector set ships this exact bug as a case that must be
+refused. `negative_cases.legacy_receipt_current_channel` is the untagged 96-byte preimage
+followed by a signature over it — "mutation: remove receipt domain/version, expected:
+reject BadReceiptSignature". Had I run the negative cases first rather than the accept
+cases, the fault would have had a name before I found it by comparing bytes.
+
 ---
 
 ## What this implementation chose
