@@ -117,6 +117,8 @@ refuses("a truncated hash is refused", lambda: verify_merkle_path(a[:31], [(b, F
 dup = merkle_root([a, b, c], odd_policy="duplicate")
 pro = merkle_root([a, b, c], odd_policy="promote")
 check("odd-count roots differ between the two conventions", dup != pro, True)
+# F.3: "an odd last node is duplicated" — so the default must be that one, not the other.
+check("the default odd-node policy is F.3's duplicate", merkle_root([a, b, c]), dup)
 
 print()
 print("aggregate")
