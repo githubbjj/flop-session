@@ -14,11 +14,13 @@ Scope: transcript leaves, the Merkle accumulator, the checked aggregate, and the
 preimage. Not the chain, not settlement, not TOPLOC/TEE attestation.
 
 STATUS — read this before trusting a result. There is no reference implementation and no
-published test vectors for FLOP, so nothing here is checked against an authority the way
-a port normally would be. What is verified is internal consistency: the byte layouts
-reproduce the sizes the spec states (236/172/140/116, VerifiedTurn 268). Three places
-where the spec does not determine an answer are marked AMBIGUOUS and surfaced as explicit
-choices rather than guessed silently. See FINDINGS.md.
+published test vectors for FLOP, so nothing here was checked against an authority the way
+a port normally would be. That changed: `evidence/wire-format-v1.json` in flop-labs/yellowpaper
+is a canonical vector set, and `test_vectors.py` runs this module against it — leaf preimages
+and hashes for all four versions, the Merkle root and path, the receipt preimage, and
+`channel_id`. Finding the receipt preimage wrong is what that file bought; see FINDINGS #5.
+Where the spec still does not determine an answer the call is marked AMBIGUOUS and surfaced
+as an explicit choice rather than guessed silently. See FINDINGS.md.
 
 Apache-2.0.
 """
@@ -43,6 +45,15 @@ MAX_ACTIVE_RESERVATIONS_BASE = 4           # §12.2, Appendix A
 
 LEAF_SIZES = {"V3": 236, "V2": 172, "V1": 140, "V0": 116}   # App. F.3
 VERIFIED_TURN_FIXED_BYTES = 268                             # App. F.3
+
+# App. F.1/F.3 domain separation. The leaf and the Merkle node deliberately carry no
+# prefix — length alone separates a 64 B node from every leaf preimage — but the two
+# signed-by-a-party messages do, and they carry a version byte with it.
+CHANNEL_ID_DOMAIN = b"FLOP/COMPUTE_CHANNEL/ID"
+RECEIPT_DOMAIN = b"FLOP/COMPUTE_CHANNEL/RECEIPT"
+PROTOCOL_VERSION = 1
+CHANNEL_ID_PREIMAGE_BYTES = 128
+RECEIPT_PREIMAGE_BYTES = 125
 
 LeafVersion = Literal["V3", "V2", "V1", "V0"]
 OddNodePolicy = Literal["duplicate", "promote"]
@@ -207,22 +218,66 @@ def checked_aggregate_gn(turns: Sequence[VerifiedTurn]) -> int:
     return sum(t.g_n for t in turns)
 
 
-def receipt_preimage(
-    channel_id: bytes, final_root: bytes, aggregate_gn: int, payable: int
+def channel_id(
+    genesis_hash: bytes, agent: bytes, miner: bytes, nonce: int
 ) -> bytes:
-    """App. F.3: sr25519 over channel_id ‖ final_root ‖ aggregate_gn:u128LE ‖ payable:u128LE.
+    """App. F.1 channel_id v1.
 
-    AMBIGUOUS (FINDINGS #3). `payable` appears exactly once in the Yellow Paper — in this
-    row — and is never defined: not in §12.1, not in Appendix A. The receipt "authorizes
-    the bound payout", so the agent is signing a number whose meaning the spec does not
-    give it. Encoding it is unambiguous; knowing what to put there is not.
+    blake2_256(domain ‖ 01 ‖ genesis_hash ‖ agent ‖ miner ‖ nonce:u64LE) — 128 B preimage.
+
+    The genesis hash is what stops a receipt signed on one deployment from replaying on
+    another, and the nonce is what stops the same agent/miner pair from colliding across
+    sessions. Both are inside the id, so every leaf and the receipt inherit that binding
+    from their first field without needing a prefix of their own.
     """
-    return (
-        _h256("channel_id", channel_id)
+    preimage = (
+        CHANNEL_ID_DOMAIN
+        + bytes([PROTOCOL_VERSION])
+        + _h256("genesis_hash", genesis_hash)
+        + _h256("agent", agent)
+        + _h256("miner", miner)
+        + _uint("nonce", nonce, 8)
+    )
+    if len(preimage) != CHANNEL_ID_PREIMAGE_BYTES:
+        raise TranscriptError(
+            f"channel_id preimage is {len(preimage)} bytes, spec says {CHANNEL_ID_PREIMAGE_BYTES}"
+        )
+    return blake2_256(preimage)
+
+
+def receipt_preimage(
+    channel_id_bytes: bytes, final_root: bytes, aggregate_gn: int, payable: int
+) -> bytes:
+    """App. F.3 agent receipt v1 — the bytes the agent counter-signs with sr25519.
+
+        "FLOP/COMPUTE_CHANNEL/RECEIPT" ‖ 01 ‖ channel_id ‖ final_root
+                                       ‖ aggregate_gn:u128LE ‖ payable:u128LE
+
+    125 bytes. Earlier revisions of this file built the four fields without the domain tag
+    and version byte, on the strength of R12.1b's prose ("counter-sign a receipt over the
+    cumulative root"); the published vectors show the tag is part of the preimage. An agent
+    signing the untagged 96 bytes produces a signature `settle` rejects — and, worse, one
+    that is not domain-separated from any other 96-byte payload. See FINDINGS #5.
+
+    AMBIGUOUS (FINDINGS #3). `payable` occurs exactly once in the Yellow Paper — in this
+    row — and is never defined: not in §12.1, not in Appendix A, not as an argument of
+    `settle`. The receipt authorizes the payout, so the agent is signing a number whose
+    meaning the spec does not give it. Encoding it is unambiguous; knowing what to put
+    there is not. Reported upstream as flop-labs/yellowpaper#56.
+    """
+    preimage = (
+        RECEIPT_DOMAIN
+        + bytes([PROTOCOL_VERSION])
+        + _h256("channel_id", channel_id_bytes)
         + _h256("final_root", final_root)
         + _uint("aggregate_gn", aggregate_gn, 16)
         + _uint("payable", payable, 16)
     )
+    if len(preimage) != RECEIPT_PREIMAGE_BYTES:
+        raise TranscriptError(
+            f"receipt preimage is {len(preimage)} bytes, spec says {RECEIPT_PREIMAGE_BYTES}"
+        )
+    return preimage
 
 
 # ── signature verification ───────────────────────────────────────────────────
