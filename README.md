@@ -17,7 +17,9 @@ receipt is what authorises the payout. This is that check, runnable today.
 
 - Builds the transcript leaf preimage exactly as Appendix F.3 states it (V3, with V2/V1/V0
   for legacy decode and size checks)
-- Verifies the enclave's sr25519 signature over the 32-byte leaf hash
+- Verifies the enclave's sr25519 signature over the 32-byte leaf hash, under the one leaf
+  version the turn declares — never by retrying another (FINDINGS #6)
+- Enforces F.3's accepted-version cutoff when the channel is policy-pinned
 - Folds each turn up its Merkle path to the final root
 - Recomputes the checked aggregate over distinct turn indices
 - Derives `channel_id` (App. F.1) rather than taking it on trust
@@ -61,7 +63,7 @@ wrong enclave key, wrong root, a transcript from another channel, duplicate turn
 
 ```console
 $ python test_session.py
-24/24 checks passed
+29/29 checks passed
 ```
 
 Both are needed. The vectors prove the bytes are right; they say nothing about whether a
@@ -71,6 +73,11 @@ refusal but, on its own, proved the receipt was 96 bytes for five days.
 The spec is a draft and iterating. Treat this as a reading of that draft, not a client.
 
 ## The point of it
+
+Two of the six entries in FINDINGS.md are bugs in this code rather than gaps in the spec,
+and both came from building against the normative body's prose instead of Appendix F and its
+decision record. They are written up in full because a verifier's error record is part of
+what you are trusting.
 
 Implementing surfaced four places where the Yellow Paper looked underdetermined — a leaf
 definition in the normative body that the format appendix forbids, and a value the agent
@@ -100,14 +107,20 @@ from flop_session import VerifiedTurn, verify_transcript
 
 check = verify_transcript(
     channel_id=channel_id,
-    enclave_key=enclave_key,        # attested once at open_channel
-    turns=turns,
+    enclave_key=enclave_key,           # attested once at open_channel
+    turns=turns,                       # each carries its own leaf_version
     final_root=final_root,
     claimed_aggregate_gn=claimed,
+    pinned_decode_policy=policy_hash,  # None only for a pre-policy channel
 )
 if not check.ok:
     raise SystemExit(f"refusing to counter-sign: {check.reason}")
 ```
+
+`pinned_decode_policy` has no default on purpose. Supplying it says the channel has a
+`ChannelDecodePolicies` entry, and F.3's cutoff is then enforced: only tagged V2/V3, each
+with a matching policy hash. `None` models a channel opened before policy binding, which
+accepts explicit V0–V3. No single default is safe for both.
 
 `merkle_root` takes an explicit `odd_policy`, defaulting to F.3's `"duplicate"`. The
 argument stays because the two conventions give different roots for any leaf count that is
