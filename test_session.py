@@ -82,7 +82,8 @@ def make_turn(i: int, g_n: int, path=()) -> VerifiedTurn:
 
 
 def sign_turn(t: VerifiedTurn) -> VerifiedTurn:
-    digest = t.leaf_hash(CHANNEL_ID, "V3")
+    """Sign the leaf the turn declares — an enclave signs one version, not a menu."""
+    digest = t.leaf_hash(CHANNEL_ID, t.leaf_version)
     sig = sr25519.sign((PUB, PRIV), digest)
     return VerifiedTurn(**{**t.__dict__, "enclave_sig": sig})
 
@@ -180,6 +181,54 @@ refuses(
     lambda: verify_transcript(
         channel_id=CHANNEL_ID, enclave_key=PUB, turns=[tampered, turns[1]],
         final_root=root, claimed_aggregate_gn=100_250,
+    ),
+)
+
+print()
+print("the accepted-version cutoff (App. F.3, D-0505)")
+POLICY = blake2_256(b"decode-policy")
+
+# A turn whose fields are V3 but whose tag says V2. Trial verification would hash it as V3,
+# find a match and report "verified"; selecting the declared version refuses it. This is the
+# whole of FINDINGS #6 in one case.
+mislabelled = VerifiedTurn(**{**turns[0].__dict__, "leaf_version": "V2"})
+refuses(
+    "a V2 tag over V3 fields is refused, not retried as V3",
+    lambda: verify_transcript(
+        channel_id=CHANNEL_ID, enclave_key=PUB, turns=[mislabelled, turns[1]],
+        final_root=root, claimed_aggregate_gn=350, pinned_decode_policy=POLICY,
+    ),
+)
+
+# V2 omits toploc_commitment_hash, so admitting one on a policy-pinned channel is an
+# evidence downgrade whatever the signature says.
+v2_raw = VerifiedTurn(**{**raw[0].__dict__, "leaf_version": "V2", "merkle_path": [(leaves[1], False)]})
+v2_signed = sign_turn(v2_raw)
+v2_leaf = v2_signed.leaf_hash(CHANNEL_ID, "V2")
+v2_root = merkle_parent(v2_leaf, leaves[1])
+v2_ok = verify_transcript(
+    channel_id=CHANNEL_ID, enclave_key=PUB,
+    turns=[VerifiedTurn(**{**v2_signed.__dict__, "merkle_path": [(leaves[1], False)]}),
+           VerifiedTurn(**{**turns[1].__dict__, "merkle_path": [(v2_leaf, True)]})],
+    final_root=v2_root, claimed_aggregate_gn=350, pinned_decode_policy=POLICY,
+)
+check("a correctly tagged V2 turn is admissible on a pinned channel", v2_ok.ok, True)
+check("and is reported as V2, not silently as V3", v2_ok.versions[0], "V2")
+
+legacy = sign_turn(VerifiedTurn(**{**raw[0].__dict__, "leaf_version": "V1"}))
+refuses(
+    "a legacy V1 tag is refused on a policy-pinned channel",
+    lambda: verify_transcript(
+        channel_id=CHANNEL_ID, enclave_key=PUB,
+        turns=[VerifiedTurn(**{**legacy.__dict__, "merkle_path": [(leaves[1], False)]})],
+        final_root=root, claimed_aggregate_gn=100, pinned_decode_policy=POLICY,
+    ),
+)
+refuses(
+    "a turn whose decode policy is not the channel's is refused",
+    lambda: verify_transcript(
+        channel_id=CHANNEL_ID, enclave_key=PUB, turns=turns,
+        final_root=root, claimed_aggregate_gn=350, pinned_decode_policy=bytes(32),
     ),
 )
 
