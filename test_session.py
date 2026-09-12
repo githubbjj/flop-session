@@ -94,7 +94,7 @@ for v, size in LEAF_SIZES.items():
 
 fixed = 4 + 32 + 32 + 16 + 32 + 32 + 32 + 8 + 8 + 8 + 64
 check("VerifiedTurn fixed fields sum to 268", fixed, VERIFIED_TURN_FIXED_BYTES)
-check("receipt preimage is 96 bytes", len(receipt_preimage(CHANNEL_ID, b"\x11" * 32, 5, 7)), 96)
+check("receipt preimage is 125 bytes", len(receipt_preimage(CHANNEL_ID, b"\x11" * 32, 5, 7)), 125)
 
 print()
 print("merkle")
