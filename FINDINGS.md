@@ -1,4 +1,4 @@
-# Four things the Yellow Paper does not settle for an agent-side verifier
+# What an agent-side verifier runs into in the Yellow Paper — and one thing I got wrong
 
 Found by implementing the agent's R12.1b duty — verify every turn and counter-sign the
 receipt — against **Yellow Paper v0.5.0, updated 2026-09-05**.
@@ -10,6 +10,16 @@ authorises.
 None of them appear in the open-items list (E.8–E.51) as far as that list is referenced in
 the body. E.51 (canonical wire-format closure) is adjacent to #1 but is about the accepted
 legacy cutoff, not about the body and the appendix disagreeing.
+
+**Status, 2026-09-12.** #1 was already filed upstream by someone else, and is the more
+thorough write-up: [flop-labs/yellowpaper#4]. #2 is retracted — it was my misreading. #3
+and #4 are filed as [#56] and [#57], and an independent conformance lab reproduced both
+within the hour. #5 is not a spec problem at all; it is a bug the spec's own published
+vectors found in **this** code.
+
+[flop-labs/yellowpaper#4]: https://github.com/flop-labs/yellowpaper/issues/4
+[#56]: https://github.com/flop-labs/yellowpaper/issues/56
+[#57]: https://github.com/flop-labs/yellowpaper/issues/57
 
 ---
 
@@ -113,15 +123,58 @@ may not exist.
 
 ---
 
+## 5. The receipt preimage here was wrong, and FLOP's own vectors caught it
+
+**Mine, not the spec's. Found and fixed 2026-09-12.**
+
+This module built the agent receipt as four bare fields:
+
+    channel_id ‖ final_root ‖ aggregate_gn:u128LE ‖ payable:u128LE     # 96 bytes — wrong
+
+That came from reading R12.1b's prose, which says the agent "counter-signs a receipt over
+the cumulative root" and never mentions a domain tag. Appendix F.3's actual row does:
+
+> agent receipt v1 — sr25519 over `"FLOP/COMPUTE_CHANNEL/RECEIPT" ‖ 01 ‖ channel_id ‖
+> final_root ‖ aggregate_gn:u128LE ‖ payable:u128LE`
+
+28 bytes of ASCII domain plus a version byte, so **125 bytes, not 96**. An agent signing
+the untagged form produces a signature `settle` rejects outright — and a payload with no
+domain separation from any other 96-byte message, which is the exact class of mistake
+R6.5e exists to prevent.
+
+Two things are worth saying about how this was caught.
+
+**It was not caught by the test suite.** `test_session.py` asserted the preimage was 96
+bytes and passed, because the assertion and the implementation shared the same wrong
+belief. A suite written against your own reading cannot find a misreading.
+
+**It was caught the day the vectors were noticed.** `evidence/wire-format-v1.json` at
+flop-labs/yellowpaper has been public since 10 September, and this repository claimed in
+print that "no reference implementation and no published test vectors for FLOP" existed —
+which was true when written and stopped being true without anyone here checking. The fix
+is `test_vectors.py`, which runs this module against those vectors pinned by commit and
+SHA-256: leaf preimages and hashes for all four versions, the Merkle root and path, the
+receipt preimage, `channel_id`, and both sr25519 signatures. 18/18.
+
+The lesson is the one this repository was written about in the first place. A verifier
+that only ever agrees with itself is not a verifier, and I shipped one for five days.
+
+---
+
 ## What this implementation chose
 
 - **V3 leaf** per F.3, with V2 accepted on verification only, since F.3 says the verifier
   tries V3→V2. V1/V0 are constructed only to reproduce the stated sizes.
-- **Odd-node policy is a required argument** with no default. There is no defensible
-  default while #2 is open, so the caller has to say which convention it means.
+- **Odd-node policy stays an explicit argument**, defaulting to F.3's `duplicate`. The
+  argument survives #2's retraction so that code reused against a different Merkle spec
+  has to name that spec's convention rather than inherit FLOP's.
 - **`payable` is passed in.** The module encodes it correctly and documents that it cannot
   tell the caller what it should be.
 
+- **`channel_id` is derived here** rather than taken on trust, so the genesis hash and the
+  session nonce that bind a receipt to one deployment are checked, not assumed.
+
 Sizes reproduce the spec exactly — 236 / 172 / 140 / 116 for the leaf versions, 268 for
-the fixed part of `VerifiedTurn`, 96 for the receipt preimage — so the layouts here are at
-least self-consistent with what the document states.
+the fixed part of `VerifiedTurn`, 125 for the receipt preimage, 128 for the `channel_id`
+preimage — and, since #5, every one of those is confirmed against FLOP's published
+vectors rather than against this file's own reading.
