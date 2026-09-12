@@ -42,26 +42,34 @@ whether they are the same value.
 **Suggested fix:** have §12.1b and C.4 cite F.3 rather than restate a field list, or state
 the V3 list in full. One definition, one place.
 
-## 2. Odd node counts leave the Merkle root undefined
+## 2. ~~Odd node counts leave the Merkle root undefined~~ — RETRACTED
 
-F.3 fixes the node rule and the path item:
+**This finding was wrong. Retracted 2026-09-12.** The rule is specified, in the notes
+column of the same Appendix F.3 table row whose node rule I quoted:
 
-> `node = blake2_256(left ‖ right)`; each item `(sibling_hash:H256, sibling_is_left:bool)`
+> leaf order is turn order; left is first; **an odd last node is duplicated**; empty root
+> is `00×32`; single-leaf root is the leaf
 
-It never says what happens at a level with an odd number of nodes. The two conventions in
-common use are to hash the odd node against itself, or to promote it unchanged to the next
-level — the second is what Substrate's own `binary-merkle-tree` does.
+So F.3 names the convention — hash the odd node against itself — and there is no
+ambiguity to report. I read the rule out of the row and not the note beside it.
 
-They produce **different roots** for any leaf count that is not a power of two. Three
-leaves is enough to diverge; `test_session.py` asserts the divergence rather than
-describing it.
+What I originally claimed is left below, struck, rather than deleted, because a verifier
+that quietly edits its own error record is not one you should trust with a root.
 
-The root is what the agent counter-signs and what `settle` verifies every submitted turn
-against, so this is not an internal detail — two conforming implementations disagree about
-the value that authorises payment.
+> ~~It never says what happens at a level with an odd number of nodes. The two conventions
+> in common use are to hash the odd node against itself, or to promote it unchanged to the
+> next level — the second is what Substrate's own `binary-merkle-tree` does. They produce
+> different roots for any leaf count that is not a power of two.~~
 
-**Suggested fix:** one sentence naming the convention. If it is Substrate's
-`binary-merkle-tree`, saying so is enough.
+The divergence itself is real and `test_session.py` still asserts it, so the test stays.
+What changes is the conclusion: `merkle_root` keeps its explicit `odd_policy` argument,
+but no longer because the spec is silent — it is there so a caller reusing this code
+against a **different** Merkle spec has to say which convention that one uses. Against
+FLOP, the answer is F.3's: duplicate.
+
+Upstream now has a related, sharper report from someone else —
+[flop-labs/yellowpaper#44](https://github.com/flop-labs/yellowpaper/issues/44) — showing
+that the duplication rule makes F.3's own `wrong_path_orientation` corpus case pass.
 
 ## 3. `payable` is signed but never defined
 
