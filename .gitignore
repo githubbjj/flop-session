@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Fetched by test_vectors.py, pinned by commit and SHA-256 rather than vendored:
+# the upstream file is FLOP Labs' and carries their licence, not this repository's.
+vectors/
