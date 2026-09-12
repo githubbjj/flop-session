@@ -38,12 +38,20 @@ and running against them found this module's receipt preimage **wrong** — see
 
 **Against FLOP's vectors** — pinned by commit and SHA-256, refusing to run if the bytes
 differ. Leaf preimages and hashes for all four versions, the Merkle root and an
-authentication path, the receipt preimage, `channel_id`, and both sr25519 signatures:
+authentication path, the receipt preimage, `channel_id`, both sr25519 signatures, and the
+five published **negative** cases this module is in scope for:
 
 ```console
 $ python test_vectors.py
-18/18 checks passed against the pinned vectors
+23/23 checks passed against the pinned vectors
 ```
+
+One of those negative cases is this repository's own bug shipped as a vector.
+`legacy_receipt_current_channel` is the untagged 96-byte receipt preimage followed by a
+signature over it — exactly what FINDINGS #5 describes — and it must be refused. The other
+nine negative cases act on SCALE-encoded wire bytes; this module takes structured turns
+rather than a `TranscriptBlob`, so `test_vectors.py` names them as out of scope instead of
+skipping them silently.
 
 **Against itself** — the sizes the spec states (236 / 172 / 140 / 116 for the leaf
 versions, 268 for `VerifiedTurn`'s fixed part, 125 for the receipt preimage) and, mostly,
