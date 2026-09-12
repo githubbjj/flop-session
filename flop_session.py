@@ -102,6 +102,10 @@ class VerifiedTurn:
     latency_ms: int
     enclave_sig: bytes
     merkle_path: Sequence[tuple[bytes, bool]] = field(default_factory=tuple)
+    # F.3 lists `leaf_version` as the first field of the VerifiedTurn container: "mandatory
+    # SCALE enum at the start of every current settlement/dispute turn container". It is
+    # part of the submitted data, not something a verifier gets to infer.
+    leaf_version: LeafVersion = "V3"
 
     def leaf_preimage(self, channel_id: bytes, version: LeafVersion = "V3") -> bytes:
         """The exact bytes hashed into the leaf, per App. F.3.
@@ -305,22 +309,26 @@ def verify_turn_signature(
     enclave_key: bytes,
     *,
     verifier: Verifier = _sr25519_verify,
-    accept_v2: bool = True,
-) -> LeafVersion | None:
-    """Which leaf version this turn's signature validates under, or None.
+) -> bool:
+    """Does the enclave signature verify under the version this turn declares?
 
-    App. F.3: "no explicit version byte; verifier tries V3→V2". The signature covers the
-    32-byte leaf hash, not the preimage.
+    Exactly one preimage is tried — the one the turn's own `leaf_version` tag names. F.3:
+
+        unknown tags reject; verifier selects exactly one preimage and never retries
+
+    Earlier revisions of this file tried V3 and then fell back to V2, on the strength of an
+    older F.3 wording. That is worse than a wrong answer: V2 omits `toploc_commitment_hash`,
+    so a fallback quietly accepts a turn carrying less evidence than the channel requires,
+    and reports it as verified. See FINDINGS #6, and the reason D-0505 gives for removing
+    trial verification from the runtime.
+
+    The signature covers the 32-byte leaf hash, not the preimage.
     """
-    versions: list[LeafVersion] = ["V3", "V2"] if accept_v2 else ["V3"]
-    for v in versions:
-        try:
-            digest = turn.leaf_hash(channel_id, v)
-        except TranscriptError:
-            continue
-        if verifier(turn.enclave_sig, digest, enclave_key):
-            return v
-    return None
+    try:
+        digest = turn.leaf_hash(channel_id, turn.leaf_version)
+    except TranscriptError:
+        return False
+    return verifier(turn.enclave_sig, digest, enclave_key)
 
 
 # ── the agent-side gate ──────────────────────────────────────────────────────
@@ -342,12 +350,18 @@ def verify_transcript(
     final_root: bytes,
     claimed_aggregate_gn: int,
     verifier: Verifier = _sr25519_verify,
-    accept_v2: bool = True,
+    pinned_decode_policy: bytes | None = None,
 ) -> TranscriptCheck:
     """Everything the agent must confirm before counter-signing. Fail-closed.
 
     Returns a result rather than raising, so a caller cannot accidentally treat an
     exception path as success. Any false is a refusal to sign.
+
+    `pinned_decode_policy` is the channel's `ChannelDecodePolicies` entry, and passing it is
+    how a caller says the channel is policy-bound. F.3's accepted-version cutoff then
+    applies: only explicitly tagged V2/V3 leaves are admissible and each must carry an equal
+    policy hash. Passing None models a channel opened before policy binding, which accepts
+    explicit V0-V3. There is no default that is safe for both, so the caller states which.
     """
     try:
         aggregate = checked_aggregate_gn(turns)
@@ -361,15 +375,28 @@ def verify_transcript(
 
     versions: list[LeafVersion] = []
     for t in turns:
-        v = verify_turn_signature(
-            t, channel_id, enclave_key, verifier=verifier, accept_v2=accept_v2
-        )
-        if v is None:
-            return TranscriptCheck(False, f"turn {t.turn_index}: enclave signature does not verify")
-        versions.append(v)
+        if pinned_decode_policy is not None:
+            if t.leaf_version not in ("V3", "V2"):
+                return TranscriptCheck(
+                    False,
+                    f"turn {t.turn_index}: {t.leaf_version} leaf on a policy-pinned channel "
+                    "(UnsupportedLeafVersion)",
+                )
+            if t.decode_policy_hash != pinned_decode_policy:
+                return TranscriptCheck(
+                    False, f"turn {t.turn_index}: decode policy does not match the channel's"
+                )
+
+        if not verify_turn_signature(t, channel_id, enclave_key, verifier=verifier):
+            return TranscriptCheck(
+                False,
+                f"turn {t.turn_index}: enclave signature does not verify as "
+                f"{t.leaf_version}",
+            )
+        versions.append(t.leaf_version)
 
         try:
-            leaf = t.leaf_hash(channel_id, v)
+            leaf = t.leaf_hash(channel_id, t.leaf_version)
         except TranscriptError as e:
             return TranscriptCheck(False, f"turn {t.turn_index}: {e}")
         if not verify_merkle_path(leaf, t.merkle_path, final_root):
