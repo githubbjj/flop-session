@@ -141,15 +141,17 @@ def merkle_parent(left: bytes, right: bytes) -> bytes:
 def merkle_root(leaves: Sequence[bytes], odd_policy: OddNodePolicy = "duplicate") -> bytes:
     """Build a root from leaf hashes.
 
-    AMBIGUOUS (FINDINGS #2). The spec fixes the node rule and the path item shape but
-    never says how a level with an odd node count is handled. The two conventions in
-    common use disagree, and they produce different roots for any count that is not a
-    power of two — so two conforming implementations would disagree on the very value the
-    agent signs. Both are implemented; the caller must choose, and there is no default
-    that can be called correct.
+    Appendix F.3 settles the odd-node case: "an odd last node is duplicated". That is the
+    default here, and it is the only value correct against FLOP.
 
-      duplicate — hash the odd node against itself
+      duplicate — hash the odd node against itself                        <- F.3
       promote   — carry the odd node up one level unchanged (Substrate binary-merkle-tree)
+
+    `promote` stays implemented, and the argument stays explicit, because the two
+    conventions give different roots for any leaf count that is not a power of two: code
+    reused against some other Merkle spec must name that spec's convention rather than
+    inherit FLOP's. FINDINGS #2 records that this file once claimed F.3 was silent here,
+    and why that was wrong.
     """
     if not leaves:
         raise TranscriptError("cannot build a root from zero leaves")
