@@ -167,10 +167,60 @@ cases, the fault would have had a name before I found it by comparing bytes.
 
 ---
 
+## 6. This module retried across leaf versions, which the spec forbids and which downgrades evidence
+
+**Mine, not the spec's. Found and fixed 2026-09-12, an hour after #5.**
+
+`verify_turn_signature` hashed each turn as V3, and if that signature did not verify, hashed
+it again as V2 and accepted whichever matched. The docstring justified it by quoting F.3:
+*"no explicit version byte; verifier tries V3-then-V2"*. That sentence is not in the
+published mirror. What Appendix F.3 says now is the opposite:
+
+> `TranscriptLeafVersion` - mandatory SCALE enum at the start of every current
+> settlement/dispute turn container; unknown tags reject; **verifier selects exactly one
+> preimage and never retries**
+
+Decision record [D-0505] says why the rule exists, and in doing so describes the bug I
+shipped:
+
+> The runtime tried multiple historical leaf hashes after signature failure, making the
+> accepted format set difficult to audit.
+
+**Why retrying is worse than a wrong answer.** V2 is V3 without `h_ids` and
+`toploc_commitment_hash`. A fallback therefore accepts a turn that carries no TOPLOC
+commitment on a channel whose policy requires one, and reports it to the caller as verified.
+The agent counter-signs a receipt for work with weaker evidence than it believes it has, and
+nothing in the result says so. F.3 marks exactly this in V2's own row - *"does not claim V3
+token-ID/TOPLOC binding"* - and it is the substance of upstream issue
+[#25](https://github.com/flop-labs/yellowpaper/issues/25).
+
+**The fix.** `VerifiedTurn` now carries `leaf_version`, which is where F.3 puts it: the first
+field of the container, submitted data rather than something a verifier infers. Exactly that
+preimage is hashed, once. `verify_transcript` also takes `pinned_decode_policy`, and when the
+caller supplies one - meaning the channel has a `ChannelDecodePolicies` entry - the
+accepted-version cutoff is enforced: only tagged V2/V3, each with a matching policy hash.
+There is no default that is safe for both a pinned and a pre-policy channel, so the caller
+states which it has.
+
+Five new cases in `test_session.py` cover it, the first being the one that matters: a turn
+whose fields are V3 but whose tag says V2 is refused rather than re-hashed until something
+fits.
+
+**How it was found.** Not by the vectors - the accept cases pass either way, and the negative
+case that would have caught it (`wrong_leaf_version`) acts on SCALE wire bytes this module
+does not decode. It came out of reading `decisions/v0.5.md`, which I had not opened until I
+went looking for what else in the repository I had never read. Two bugs in one afternoon,
+both from building against the normative body's prose instead of the format appendix and its
+decision record.
+
+[D-0505]: https://github.com/flop-labs/yellowpaper/blob/main/decisions/v0.5.md
+
+---
+
 ## What this implementation chose
 
-- **V3 leaf** per F.3, with V2 accepted on verification only, since F.3 says the verifier
-  tries V3→V2. V1/V0 are constructed only to reproduce the stated sizes.
+- **The version the turn declares**, hashed once, never retried (FINDINGS #6). V1/V0 are
+  constructed only to reproduce the stated sizes and to read pre-policy channels.
 - **Odd-node policy stays an explicit argument**, defaulting to F.3's `duplicate`. The
   argument survives #2's retraction so that code reused against a different Merkle spec
   has to name that spec's convention rather than inherit FLOP's.
